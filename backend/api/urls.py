@@ -1,6 +1,6 @@
 from django.urls import path
-# We will import our view here later
+from .views import AnalyzeSpendView
 
 urlpatterns = [
-    # We will add our path here later
+    path('analyze/', AnalyzeSpendView.as_view(), name='analyze-spend'),
 ]
