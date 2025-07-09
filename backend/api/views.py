@@ -1,141 +1,133 @@
-from django.shortcuts import render
-
-# Create your views here.
 import requests
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+import json
 
-# The base URL for the USAspending API v2.
-USA_SPENDING_API_URL = "https://api.usaspending.gov/api/v2/search/spending_by_recipient/"
+# The single, correct endpoint that you discovered and verified.
+USA_SPENDING_API_URL = "https://api.usaspending.gov/api/v2/search/spending_by_category/recipient_duns/"
 
 class AnalyzeSpendView(APIView):
     """
-    This view handles the analysis of federal spending data.
-    It receives a POST request with 'topN' and 'declinePct',
-    fetches data from the USAspending API for FY2023 and FY2024,
-    calculates the percentage change in revenue for the top N companies,
-    and returns the companies that saw a decline greater than the specified percentage.
+    This view handles the analysis of federal spending data using a corrected,
+    paginated strategy to respect the API's rate limits.
     """
 
     def post(self, request, *args, **kwargs):
-        # 1. Extract and validate input from the request payload.
         top_n_str = request.data.get('topN')
         decline_pct_str = request.data.get('declinePct')
-
-        if not top_n_str or not decline_pct_str:
-            return Response(
-                {"error": "Both 'topN' and 'declinePct' are required."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
 
         try:
             top_n = int(top_n_str)
             decline_pct = float(decline_pct_str)
-            if top_n <= 0 or decline_pct < 0:
-                raise ValueError
+            if top_n > 100:
+                # The API limit is 100, so we cannot search for more than that directly.
+                return Response({"error": "Please enter a value of 100 or less for 'Top N companies'."}, status=status.HTTP_400_BAD_REQUEST)
         except (ValueError, TypeError):
-            return Response(
-                {"error": "Invalid input. 'topN' must be a positive integer and 'declinePct' must be a non-negative number."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({"error": "Invalid input."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # 2. Fetch Top N companies for Fiscal Year 2023.
         try:
-            fy2023_data = self.fetch_spending_data(2023, top_n)
+            # 1. Get the top N recipients for FY2023. This is a single, valid call.
+            fy2023_data = self.fetch_single_page(2023, top_n)
             if not fy2023_data:
-                return Response({"results": []}) # Return empty if no data for 2023
+                return Response([])
+            
+            # 2. Get a large list of recipients for FY2024 by making multiple paginated requests.
+            # We will fetch up to 50 pages (50 * 100 = 5000 records) to build a good lookup map.
+            fy2024_data = self.fetch_paginated_list(2024, num_pages=50)
 
-            # Extract the recipient IDs (DUNS numbers) for the next query.
-            recipient_ids = [item['recipient_duns'] for item in fy2023_data]
-
-            # 3. Fetch spending data for those same companies for Fiscal Year 2024.
-            fy2024_data = self.fetch_spending_data(2024, None, recipient_ids)
-
-            # 4. Process and combine the data.
+            # 3. Combine, calculate, and filter the results in Python.
             results = self.process_and_filter_data(fy2023_data, fy2024_data, decline_pct)
 
             return Response(results)
 
         except requests.exceptions.RequestException as e:
-            # Handle potential network errors or issues with the external API.
+            error_message = str(e)
+            if e.response:
+                try:
+                    error_message = e.response.json()
+                except json.JSONDecodeError:
+                    error_message = e.response.text
             return Response(
-                {"error": f"Failed to connect to USAspending API: {e}"},
+                {"error": f"Failed to connect to USAspending API: {error_message}"},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE
             )
         except Exception as e:
-            # Catch any other unexpected errors during processing.
             return Response(
                 {"error": f"An unexpected error occurred: {e}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-
-    def fetch_spending_data(self, fiscal_year, limit=None, recipient_ids=None):
+    def fetch_single_page(self, fiscal_year, limit):
         """
-        Helper function to fetch data from the USAspending API for a given fiscal year.
+        Fetches a single page of ranked recipients, respecting the API limit.
         """
+        headers = {'Content-Type': 'application/json'}
         payload = {
             "filters": {
-                "time_period": [
-                    {"start_date": f"{fiscal_year - 1}-10-01", "end_date": f"{fiscal_year}-09-30"}
-                ],
-                "recipient_type": "business"
+                "time_period": [{"start_date": f"{fiscal_year - 1}-10-01", "end_date": f"{fiscal_year}-09-30"}]
             },
-            "fields": ["recipient_name", "recipient_duns", "obligated_amount"],
-            "sort": "obligated_amount",
-            "order": "desc"
+            "limit": limit,
+            "page": 1
         }
-
-        # If a limit is provided (for the top N query), add it to the payload.
-        if limit:
-            payload['limit'] = limit
         
-        # If recipient IDs are provided, add them to the filter.
-        if recipient_ids:
-            payload['filters']['recipient_duns'] = recipient_ids
-            # We don't need to sort or limit when fetching by specific IDs.
-            payload.pop('sort', None)
-            payload.pop('order', None)
+        response = requests.post(USA_SPENDING_API_URL, json=payload, headers=headers, timeout=60.0)
+        response.raise_for_status()
+        all_results = response.json().get('results', [])
+        return [d for d in all_results if d.get('code')]
 
-
-        response = requests.post(USA_SPENDING_API_URL, json=payload)
-        response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
-        return response.json().get('results', [])
+    def fetch_paginated_list(self, fiscal_year, num_pages):
+        """
+        Fetches multiple pages of data from the API and combines them into one list.
+        """
+        all_fy_data = []
+        for page_num in range(1, num_pages + 1):
+            headers = {'Content-Type': 'application/json'}
+            payload = {
+                "filters": {
+                    "time_period": [{"start_date": f"{fiscal_year - 1}-10-01", "end_date": f"{fiscal_year}-09-30"}]
+                },
+                "limit": 100,  # Use the maximum allowed limit
+                "page": page_num
+            }
+            response = requests.post(USA_SPENDING_API_URL, json=payload, headers=headers, timeout=60.0)
+            response.raise_for_status()
+            page_results = response.json().get('results', [])
+            if not page_results:
+                # Stop if there are no more results to fetch
+                break
+            all_fy_data.extend(page_results)
+        
+        return [d for d in all_fy_data if d.get('code')]
 
 
     def process_and_filter_data(self, fy2023_data, fy2024_data, decline_pct):
         """
-        Combines 2023 and 2024 data, calculates decline, and filters the results.
+        Combines the two lists using a Python dictionary for fast lookups.
         """
-        # Create a dictionary for FY2024 data for quick lookups.
-        fy2024_map = {item['recipient_duns']: float(item['obligated_amount']) for item in fy2024_data}
+        # Create a lookup map for 2024 spending: {'duns_code': amount}
+        fy2024_map = {item['code']: float(item['amount']) for item in fy2024_data}
 
         final_results = []
         for company2023 in fy2023_data:
-            duns = company2023['recipient_duns']
-            revenue2023 = float(company2023['obligated_amount'])
+            duns = company2023['code']
+            revenue2023 = float(company2023['amount'])
             
-            # Get 2024 revenue for the company, defaulting to 0 if not found.
+            # Find the company's 2024 revenue in the map, defaulting to 0.0 if not found.
             revenue2024 = fy2024_map.get(duns, 0.0)
 
-            # Avoid division by zero if 2023 revenue was 0 or negative.
             if revenue2023 <= 0:
                 continue
 
-            # Calculate the percentage change.
             percentage_change = ((revenue2024 - revenue2023) / revenue2023) * 100
 
-            # Check if the decline is greater than the user-specified threshold.
-            # A decline is a negative change, so we check if it's less than -decline_pct.
             if percentage_change < -decline_pct:
                 final_results.append({
                     "duns": duns,
-                    "name": company2023['recipient_name'],
+                    "name": company2023['name'],
                     "revenue2023": revenue2023,
                     "revenue2024": revenue2024,
                     "declinePercentage": round(percentage_change, 2)
                 })
         
         return final_results
-
