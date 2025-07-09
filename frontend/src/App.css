@@ -134,3 +134,24 @@ body {
   color: #dc3545;
   font-weight: bold;
 }
+
+/* --- NEW STYLES FOR ENHANCEMENTS --- */
+
+.sortable-header {
+  cursor: pointer;
+  user-select: none; /* Prevents text selection on click */
+}
+
+.sortable-header:hover {
+  background-color: #dee2e6; /* A slightly darker shade for hover */
+}
+
+.results-table td a {
+  color: #007bff;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.results-table td a:hover {
+  text-decoration: underline;
+}

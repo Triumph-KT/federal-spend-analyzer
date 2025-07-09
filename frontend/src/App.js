@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import axios from 'axios';
 import './App.css';
 
@@ -12,45 +12,71 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
+  // --- NEW: State for managing table sorting ---
+  const [sortConfig, setSortConfig] = useState({ key: 'declinePercentage', direction: 'ascending' });
+
+  /**
+   * This memoized value recalculates the sorted results only when
+   * the original results or the sort configuration changes.
+   */
+  const sortedResults = useMemo(() => {
+    let sortableItems = [...results];
+    if (sortConfig.key !== null) {
+      sortableItems.sort((a, b) => {
+        if (a[sortConfig.key] < b[sortConfig.key]) {
+          return sortConfig.direction === 'ascending' ? -1 : 1;
+        }
+        if (a[sortConfig.key] > b[sortConfig.key]) {
+          return sortConfig.direction === 'ascending' ? 1 : -1;
+        }
+        return 0;
+      });
+    }
+    return sortableItems;
+  }, [results, sortConfig]);
+
+  /**
+   * Function to request a new sort configuration.
+   * Called when a table header is clicked.
+   */
+  const requestSort = (key) => {
+    let direction = 'ascending';
+    if (sortConfig.key === key && sortConfig.direction === 'ascending') {
+      direction = 'descending';
+    }
+    setSortConfig({ key, direction });
+  };
+
   /**
    * Handles the form submission.
-   * It sends a POST request to the Django backend API.
    */
   const handleAnalyzeClick = async () => {
-    // Reset previous results and errors
     setIsLoading(true);
     setError('');
     setResults([]);
 
     try {
-      // The URL of our Django API endpoint
       const apiUrl = 'http://127.0.0.1:8000/api/analyze/';
       const payload = { topN, declinePct };
-
       const response = await axios.post(apiUrl, payload);
 
-      // Check if the response has data and update the state
       if (response.data && response.data.length > 0) {
         setResults(response.data);
+        // Default sort by decline percentage after fetching
+        setSortConfig({ key: 'declinePercentage', direction: 'ascending' });
       } else {
         setError('No companies found matching the criteria.');
       }
     } catch (err) {
-      // Handle different types of errors
       if (err.response) {
-        // The request was made and the server responded with a status code
-        // that falls out of the range of 2xx
         const serverError = err.response.data.error || 'An unknown server error occurred.';
         setError(`Error from server: ${serverError}`);
       } else if (err.request) {
-        // The request was made but no response was received
         setError('Could not connect to the backend server. Is it running?');
       } else {
-        // Something happened in setting up the request that triggered an Error
         setError(`An error occurred: ${err.message}`);
       }
     } finally {
-      // Ensure loading is set to false after the request is complete
       setIsLoading(false);
     }
   };
@@ -64,6 +90,16 @@ function App() {
       currency: 'USD',
       minimumFractionDigits: 2,
     }).format(amount);
+  };
+  
+  /**
+   * Helper to get the sort indicator arrow for table headers.
+   */
+  const getSortIndicator = (name) => {
+    if (sortConfig.key === name) {
+      return sortConfig.direction === 'ascending' ? ' ▲' : ' ▼';
+    }
+    return null;
   };
 
   return (
@@ -102,27 +138,44 @@ function App() {
         </div>
 
         {error && <div className="error-message">{error}</div>}
-
         {isLoading && <div className="loading-spinner"></div>}
 
-        {results.length > 0 && (
+        {/* Use sortedResults instead of results */}
+        {sortedResults.length > 0 && (
           <div className="results-container">
             <h2>Analysis Results</h2>
             <table className="results-table">
               <thead>
                 <tr>
-                  <th>Company Name</th>
+                  <th onClick={() => requestSort('name')} className="sortable-header">
+                    Company Name{getSortIndicator('name')}
+                  </th>
                   <th>DUNS</th>
-                  <th>2023 Revenue</th>
-                  <th>2024 Revenue</th>
-                  <th>Decline</th>
+                  <th onClick={() => requestSort('revenue2023')} className="sortable-header">
+                    2023 Revenue{getSortIndicator('revenue2023')}
+                  </th>
+                  <th onClick={() => requestSort('revenue2024')} className="sortable-header">
+                    2024 Revenue{getSortIndicator('revenue2024')}
+                  </th>
+                  <th onClick={() => requestSort('declinePercentage')} className="sortable-header">
+                    Decline{getSortIndicator('declinePercentage')}
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                {results.map((company) => (
+                {sortedResults.map((company) => (
                   <tr key={company.duns}>
                     <td>{company.name}</td>
-                    <td>{company.duns}</td>
+                    <td>
+                      {/* --- NEW: Link to USAspending.gov --- */}
+                      <a 
+                        href={`https://www.usaspending.gov/recipient/${company.duns}/latest`} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                      >
+                        {company.duns}
+                      </a>
+                    </td>
                     <td>{formatCurrency(company.revenue2023)}</td>
                     <td>{formatCurrency(company.revenue2024)}</td>
                     <td>
