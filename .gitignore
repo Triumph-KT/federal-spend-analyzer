@@ -1,0 +1,13 @@
+# Python/Django
+__pycache__/
+*.pyc
+venv/
+.env
+db.sqlite3
+
+# Node.js
+node_modules/
+dist/
+build/
+.npm
+npm-debug.log*
