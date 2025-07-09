@@ -130,9 +130,29 @@ STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # Tell Django which websites are allowed to make requests to our API
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://localhost:3004",
-    "http://127.0.0.1:3004",
+# CORS_ALLOWED_ORIGINS = [
+#     "http://localhost:3000",
+#     "http://127.0.0.1:3000",
+#     "http://localhost:3004",
+#     "http://127.0.0.1:3004",
+#     "http://localhost:3001",    
+#     "http://127.0.0.1:3001",   
+# ]
+
+# CORS CONFIGURATION
+# Use a regular expression to allow any localhost port for development.
+# This is more flexible than hardcoding a list of ports.
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^http://localhost:[0-9]+$",
+    r"^http://127\.0\.0\.1:[0-9]+$",
 ]
+
+# CACHE CONFIGURATION
+# Using the simple in-memory cache for this project.
+# The cache will be cleared every time the server restarts.
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'federal-spend-cache',
+    }
+}
