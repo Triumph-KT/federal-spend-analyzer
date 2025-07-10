@@ -167,14 +167,15 @@ function App() {
                   <tr key={company.duns}>
                     <td>{company.name}</td>
                     <td>
-                      {/* --- NEW: Link to USAspending.gov --- */}
+                      {/* --- START OF CHANGE --- */}
                       <a 
-                        href={`https://www.usaspending.gov/recipient/${company.duns}/latest`} 
+                        href={`https://www.usaspending.gov/recipient/${company.recipient_id}/latest`} 
                         target="_blank" 
                         rel="noopener noreferrer"
                       >
                         {company.duns}
                       </a>
+                      {/* --- END OF CHANGE --- */}
                     </td>
                     <td>{formatCurrency(company.revenue2023)}</td>
                     <td>{formatCurrency(company.revenue2024)}</td>
